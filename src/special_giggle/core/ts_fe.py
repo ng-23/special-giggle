@@ -1,6 +1,11 @@
+'''
+Feature engineering for timeseries precipitation data.
 
-# The aim of this scrupt is to derive and introduce additional relevant features to the train/test timeseries datasets 
-# as a means of enhancing the model's performance.
+Can be run as a script via command line or imported into other modules.
+'''
+
+import argparse
+from special_giggle import utils
 
 def get_args_parser():
     '''
@@ -119,5 +124,14 @@ def rolling_total_monthly_precip():
     Feature type: numerical
 
     Features created: 1
+    '''
+    pass
+
+def main():
+    '''
+    Entry point if running module as a script via command line
+
+    Parses command line args and performs feature engineering on train/test timeseries datasets, saving new
+    CSV files to disk as outputs for downstream processing
     '''
     pass

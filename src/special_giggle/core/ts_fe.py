@@ -2,23 +2,32 @@
 # The aim of this scrupt is to derive and introduce additional relevant features to the train/test timeseries datasets 
 # as a means of enhancing the model's performance.
 
+def get_args_parser():
+    '''
+    Creates commandline argument parser
+    '''
+
+    pass
+
 def init_df():
     '''
     Loads timeseries from CSV and performs base preprocessing
     '''
     pass
 
-def extract_location():
+def track_location():
     '''
     Extracts the location from the timestamp
     
     Each location is geographically different, so flood conditions may vary across locations
 
     Feature type: categorical
+
+    Features created: 1
     '''
     pass
 
-def derive_month():
+def track_month():
     '''
     Derives the month from the timestamp
 
@@ -26,55 +35,89 @@ def derive_month():
     which can help explain increased/decreased precipitation that could relate to flood events
 
     Feature type: categorical
+
+    Features created: 1
     '''
     pass
 
-def derive_season():
+def track_season():
     '''
     Derives the season from the month, according to https://southafrica-info.com/land/south-africa-weather-climate/
 
     Feature type: categorical
+
+    Features created: 1
     '''    
     pass
 
-def derive_precip_intensity():
+def track_daily_precip_intensity():
     '''
-    Derives daily precipitation intensity
+    Tracks daily precipitation intensity
 
     American Meteorological Society (AMS) defines intensities for precipitation periods (https://glossary.ametsoc.org/wiki/Rain)
 
     Feature type: categorical
+
+    Features created: 1
     '''
     pass
 
-def track_monthly_total_precip():
+def track_total_monthly_precip():
     '''
     Tracks the running total of daily precipitation for each month
 
     Feature type: numerical
+
+    Features created: 1
     '''
     pass
 
-def track_monthly_avg_precip():
+def track_avg_monthly_precip():
     '''
     Tracks the running average of daily precipitation for each month
 
     Feature type: numerical
+
+    Features created: 1
     '''
     pass
 
-def lagged_precip():
+def rolling_total_daily_precip():
     '''
-    Tracks the previous daily precipitation for a given number of past days
+    Tracks the rolling total of daily precipitation for a given number of past days
 
     Feature type: numerical
+
+    Features created: 1
     '''
     pass
 
-def lagged_precip_intensity():
+def rolling_avg_daily_precip():
     '''
-    Tracks the previous daily precipitation intensity for a given number of past days
+    Tracks the rolling average of daily precipitation for a given number of past days
 
     Feature type: numerical
+
+    Features created: 1
+    '''
+    pass
+
+def lagged_daily_precip_intensity():
+    '''
+    Tracks the daily precipitation intensity for a given number of past days
+
+    Feature type: categorical
+
+    Features created: variable
+    '''
+    pass
+
+def rolling_total_monthly_precip():
+    '''
+    Tracks the total precipitation for a given number of past months
+
+    Feature type: numerical
+
+    Features created: 1
     '''
     pass

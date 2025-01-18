@@ -2,32 +2,40 @@
 Contains various utilty code used in other modules/notebooks.
 '''
 
-import pandas as pd
+from datetime import datetime
+from datetime import timedelta
 
-def load_data(filepath:str) -> pd.DataFrame:
+def get_month_from_year_day(year, day, zero_indexed=True):
     '''
-    Load a timeseries dataset from disk
-    '''
+    Determines the month from the day of the year
 
-    pass
-
-def calc_metrics(preds, targets) -> dict:
-    '''
-    Calculate performance metrics from model predictions and known truths
+    Largely taken from https://stackoverflow.com/a/32047761/
     '''
 
-    pass
+    if zero_indexed:
+        date = datetime(year, 1, 1) + timedelta(day)
+    else:
+        date = datetime(year, 1, 1) + timedelta(day - 1)
 
-def save_model(model, filepath=''):
-    '''
-    Save a trained model to disk
-    '''
+    return date.strftime('%B').lower()
 
-    pass
-
-def load_model(filepath:str):
+def get_season_from_month(month:str):
     '''
-    Load a trained model from disk
-    '''
+    Determines the season from the month
 
-    pass
+    Assumes location is South Africa, so seasons are determined according to https://southafrica-info.com/land/south-africa-weather-climate/
+    '''
+    
+    month = month.lower()
+
+    if month in ('september','october','november'):
+        return 'spring'
+    elif month in ('december','january','february'):
+        return 'summer'
+    elif month in ('march','april','may'):
+        return 'autumn'
+    elif month in ('june','july','august'):
+        return 'winter'
+    else:
+        raise ValueError(f'Unknown month {month}')
+    

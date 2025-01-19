@@ -50,15 +50,22 @@ def init_ts(filepath:str):
     
     ts = pd.read_csv(filepath_or_buffer=filepath)
 
-    ts['event_id'] = ts['event_id'].apply(lambda event_str: '_'.join(event_str.split('_')[0:2]))
+    # each event is of the format id_location_X_timestamp
+    # we wish to separate the event identifier (aka the location) from the timestamp
+    ts['event_id'] = ['_'.join(event_str.split('_')[0:2]) for event_str in ts['event_id']]
+
+    # at this point the event identifier (location) is separate from the timestamp
+    # but in the process we've lost the timestamp, so we need to get it back
+    # each location has data for 730 days, so we need 730 timestamps per location
     ts['event_t'] = ts.groupby('event_id').cumcount()
+
     ts.set_index('event_t', inplace=True)
 
     return ts
 
 def track_month(ts:pd.DataFrame, year=2025):
     '''
-    Derives the month from the year timestamp
+    Derives the month from the day-of-the-year timestamp
 
     Certain months may correspond to a wet/dry season for a particular location,
     which can help explain increased/decreased precipitation that could relate to flood events
@@ -85,9 +92,22 @@ def track_season(ts:pd.DataFrame):
 
     return ts
 
-def track_daily_precip_intensity():
+def track_hourly_precip(ts:pd.DataFrame):
     '''
-    Tracks daily precipitation intensity
+    Derives the hourly precipitation for each day from the total daily (24 hours) precipitation
+
+    Feature type: numerical
+
+    Features created: 1
+    '''
+    
+    ts['hourly_precip'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
+
+    return ts
+
+def track_daily_precip_intensity(ts:pd.DataFrame):
+    '''
+    Tracks daily precipitation intensity based on the hourly precipitation for each day
 
     American Meteorological Society (AMS) defines intensities for precipitation periods (https://glossary.ametsoc.org/wiki/Rain)
 
@@ -95,9 +115,12 @@ def track_daily_precip_intensity():
 
     Features created: 1
     '''
-    pass
 
-def track_total_monthly_precip():
+    ts['daily_precip_intensity'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['hourly_precip']]
+    
+    return ts
+
+def track_total_monthly_precip(ts:pd.DataFrame):
     '''
     Tracks the running total of daily precipitation for each month
 
@@ -176,12 +199,18 @@ def main(args:argparse.Namespace):
     # initialize train/test timeseries dataframes
     train_ts, test_ts = init_ts(args.train_ts_path), init_ts(args.test_ts_path)
 
-    # track month as a categorical feature
+    # track the month as a categorical feature
     # we aren't given the years but we assume neither are leap years (hence 2025 for both) since we have 730 days total, not 731
     train_ts, test_ts = track_month(train_ts, year=2025), track_month(test_ts, year=2025)
 
     # track the season (winter, spring, etc.) as a categorical feature
     train_ts, test_ts = track_season(train_ts), track_season(test_ts)
+
+    # track the (average) hourly precipitation for each day (in mm, since we're using CHIRPS data) as a numerical feature
+    train_ts, test_ts = track_hourly_precip(train_ts), track_hourly_precip(test_ts)
+
+    # track the daily precipitation intensity based on the hourly precipitation rate as a categorical feature
+    train_ts, test_ts = track_daily_precip_intensity(train_ts), track_daily_precip_intensity(test_ts)
 
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))
@@ -198,3 +227,4 @@ if __name__ == '__main__':
     parser = get_args_parser()
     args = parser.parse_args()
     main(args)
+    

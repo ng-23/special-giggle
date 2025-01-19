@@ -39,3 +39,22 @@ def get_season_from_month(month:str):
     else:
         raise ValueError(f'Unknown month {month}')
     
+def get_precip_intensity(precip_per_hour:float):
+    '''
+    Determines the precipitation intensity according to American Meteorological Society (AMS) definitions
+
+    Assumes `precip_per_hour` to be in units of millimeters
+
+    See https://glossary.ametsoc.org/wiki/Rain
+    '''
+    
+    if precip_per_hour <= 0.0:
+        return 'none'
+    elif precip_per_hour > 0.0 and precip_per_hour <= 2.5:
+        return 'light'
+    elif precip_per_hour > 2.5 and precip_per_hour <= 7.6:
+        return 'moderate'
+    else:
+        return 'heavy'
+
+    

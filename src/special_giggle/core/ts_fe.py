@@ -59,8 +59,6 @@ def init_ts(filepath:str):
     # each location has data for 730 days, so we need 730 timestamps per location
     ts['event_t'] = ts.groupby('event_id').cumcount()
 
-    ts.set_index('event_t', inplace=True)
-
     return ts
 
 def track_month(ts:pd.DataFrame, year=2025):
@@ -74,8 +72,10 @@ def track_month(ts:pd.DataFrame, year=2025):
 
     Features created: 1
     '''
+
+    if 'event_t' not in ts: raise Exception('Missing required column - event_t')
     
-    ts['month'] = [utils.get_month_from_year_day(year, day) for day in ts.index]
+    ts['month'] = [utils.get_month_from_year_day(year, day) for day in ts['event_t']]
 
     return ts
 
@@ -86,7 +86,9 @@ def track_season(ts:pd.DataFrame):
     Feature type: categorical
 
     Features created: 1
-    '''    
+    '''
+
+    if 'month' not in ts: raise Exception('Missing required column - month')
     
     ts['season'] = [utils.get_season_from_month(month) for month in ts['month']]
 
@@ -100,6 +102,8 @@ def track_hourly_precip(ts:pd.DataFrame):
 
     Features created: 1
     '''
+
+    if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
     
     ts['hourly_precip'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
 
@@ -116,6 +120,8 @@ def track_daily_precip_intensity(ts:pd.DataFrame):
     Features created: 1
     '''
 
+    if 'hourly_precip' not in ts: raise Exception('Missing required column - hourly_precip')
+
     ts['daily_precip_intensity'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['hourly_precip']]
     
     return ts
@@ -128,9 +134,26 @@ def track_total_monthly_precip(ts:pd.DataFrame):
 
     Features created: 1
     '''
-    pass
 
-def track_avg_monthly_precip():
+    event_ids = ts['event_id'].unique() # get all event ids
+
+    temp_dfs = []
+
+    # TODO: this is slow - is there any way to speed it up?
+    for event_id in event_ids:
+        # separating y1 and y2 data for event_id into 2 different dataframes for further processing
+        y1_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] <= 364)].copy() # see https://stackoverflow.com/a/66362915
+        y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
+
+        # create new column in each dataframe to store the cumulative sume of the daily precipitation for each month
+        y1_data['total_monthly_precip'] = y1_data.groupby(['month'], sort=False)['precipitation'].cumsum()
+        y2_data['total_monthly_precip'] = y2_data.groupby(['month'], sort=False)['precipitation'].cumsum()
+
+        temp_dfs.append(y1_data); temp_dfs.append(y2_data)
+
+    return pd.concat(temp_dfs, axis=0) # vertically concatenate y1/y2 dataframes for each event id
+
+def track_avg_monthly_precip(ts:pd.DataFrame):
     '''
     Tracks the running average of daily precipitation for each month
 
@@ -138,7 +161,23 @@ def track_avg_monthly_precip():
 
     Features created: 1
     '''
-    pass
+    
+    event_ids = ts['event_id'].unique()
+
+    temp_dfs = []
+
+    # TODO: this is slow - is there any way to speed it up?
+    for event_id in event_ids:
+        y1_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] <= 364)].copy()
+        y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
+
+        # see https://stackoverflow.com/a/56911728/ and https://stackoverflow.com/a/58851846/
+        y1_data = y1_data.assign(avg_monthly_precip = y1_data.groupby(['month'], sort=False)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
+        y2_data = y2_data.assign(avg_monthly_precip = y2_data.groupby(['month'], sort=False)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
+
+        temp_dfs.append(y1_data); temp_dfs.append(y2_data)
+
+    return pd.concat(temp_dfs, axis=0)
 
 def rolling_total_daily_precip():
     '''
@@ -212,15 +251,23 @@ def main(args:argparse.Namespace):
     # track the daily precipitation intensity based on the hourly precipitation rate as a categorical feature
     train_ts, test_ts = track_daily_precip_intensity(train_ts), track_daily_precip_intensity(test_ts)
 
+    # track the running total of daily precipitation for each month as a numerical feature
+    train_ts = track_total_monthly_precip(train_ts)
+    test_ts = track_total_monthly_precip(test_ts)
+
+    # track the running average of daily precipitation for each month as a numerical feature
+    train_ts = track_avg_monthly_precip(train_ts)
+    test_ts = track_avg_monthly_precip(test_ts)
+
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))
 
     # save feature-engineered timeseries dataframes to disk as CSV files and print first couple rows
-    train_ts.to_csv(path_or_buf=os.path.join(output_dir, 'train_ts.csv'),)
-    test_ts.to_csv(path_or_buf=os.path.join(output_dir, 'test_ts.csv'),)
-    print(train_ts.head(n=25))
+    train_ts.to_csv(path_or_buf=os.path.join(output_dir, 'train_ts.csv'), index=False)
+    test_ts.to_csv(path_or_buf=os.path.join(output_dir, 'test_ts.csv'), index=False)
+    print(f'Train timeseries:\n {train_ts.head(n=25)}')
     print('-'*75)
-    print(test_ts.head(n=25))
+    print(f'Test timeseries:\n {test_ts.head(n=25)}')
 
 if __name__ == '__main__':
     # entry point if running as a script

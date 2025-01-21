@@ -10,6 +10,24 @@ import os
 import pandas as pd
 from special_giggle import utils
 
+# runtime config, maps a feature engineering function name to a dict of its arguments
+DEFAULT_CONFIG = {
+    'month': {},
+    'season': {},
+    'hourly_precip': {},
+    'daily_precip_intensity': {},
+    'total_monthly_precip': {},
+    'avg_daily_precip': {},
+}
+
+registered_fe_funcs = {} # maps a function name to a feature engineering function
+
+def register_fe_func(func_name:str):
+    def decorator(func):
+        registered_fe_funcs[func_name] = func
+        return func
+    return decorator
+
 def get_args_parser():
     '''
     Creates commandline argument parser
@@ -32,6 +50,19 @@ def get_args_parser():
         metavar='test-ts-path',
         type=str,
         help='Filepath to test timeseries CSV',
+        )
+    
+    parser.add_argument(
+        '--user-config', 
+        type=str, 
+        default=None,
+        help='Filepath to JSON runtime configuration file. Overrides default configuration if specified',
+        )
+    
+    parser.add_argument(
+        '--get-default-config', 
+        action='store_true', 
+        help='If specified, output the default configuration as JSON',
         )
     
     parser.add_argument(
@@ -61,7 +92,8 @@ def init_ts(filepath:str):
 
     return ts
 
-def track_month(ts:pd.DataFrame, year=2025):
+@register_fe_func('month')
+def month(ts:pd.DataFrame, year=2025):
     '''
     Derives the month from the day-of-the-year timestamp
 
@@ -79,7 +111,8 @@ def track_month(ts:pd.DataFrame, year=2025):
 
     return ts
 
-def track_season(ts:pd.DataFrame):
+@register_fe_func('season')
+def season(ts:pd.DataFrame):
     '''
     Derives the season from the month, according to https://southafrica-info.com/land/south-africa-weather-climate/
 
@@ -94,7 +127,8 @@ def track_season(ts:pd.DataFrame):
 
     return ts
 
-def track_hourly_precip(ts:pd.DataFrame):
+@register_fe_func('hourly_precip')
+def hourly_precip(ts:pd.DataFrame):
     '''
     Derives the hourly precipitation for each day from the total daily (24 hours) precipitation
 
@@ -109,7 +143,8 @@ def track_hourly_precip(ts:pd.DataFrame):
 
     return ts
 
-def track_daily_precip_intensity(ts:pd.DataFrame):
+@register_fe_func('daily_precip_intensity')
+def daily_precip_intensity(ts:pd.DataFrame):
     '''
     Tracks daily precipitation intensity based on the hourly precipitation for each day
 
@@ -126,7 +161,8 @@ def track_daily_precip_intensity(ts:pd.DataFrame):
     
     return ts
 
-def track_total_monthly_precip(ts:pd.DataFrame):
+@register_fe_func('total_monthly_precip')
+def total_monthly_precip(ts:pd.DataFrame):
     '''
     Tracks the running total of daily precipitation for each month
 
@@ -153,7 +189,8 @@ def track_total_monthly_precip(ts:pd.DataFrame):
 
     return pd.concat(temp_dfs, axis=0) # vertically concatenate y1/y2 dataframes for each event id
 
-def track_avg_monthly_precip(ts:pd.DataFrame):
+@register_fe_func('avg_daily_precip')
+def avg_daily_precip(ts:pd.DataFrame):
     '''
     Tracks the running average of daily precipitation for each month
 
@@ -179,7 +216,8 @@ def track_avg_monthly_precip(ts:pd.DataFrame):
 
     return pd.concat(temp_dfs, axis=0)
 
-def rolling_total_daily_precip():
+@register_fe_func('rolling_total_daily_precip')
+def rolling_total_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling total of daily precipitation for a given number of past days
 
@@ -189,7 +227,8 @@ def rolling_total_daily_precip():
     '''
     pass
 
-def rolling_avg_daily_precip():
+@register_fe_func('rolling_avg_daily_precip')
+def rolling_avg_daily_precip(ts:pd.DataFrame, months:int):
     '''
     Tracks the rolling average of daily precipitation for a given number of past days
 
@@ -235,29 +274,33 @@ def main(args:argparse.Namespace):
     with open(os.path.join(output_dir, 'cmd_args.json'), 'w') as f:
         json.dump(vars(args), f, indent=4)
 
+    # save the default config to disk if desired
+    if args.get_default_config:
+        with open(os.path.join(output_dir, 'default_config.json'), 'w') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=4)
+
+    # load user-supplied config if specified otherwise just use default one
+    config = DEFAULT_CONFIG if args.user_config is None else json.load(open(args.user_config))
+
     # initialize train/test timeseries dataframes
     train_ts, test_ts = init_ts(args.train_ts_path), init_ts(args.test_ts_path)
 
-    # track the month as a categorical feature
-    # we aren't given the years but we assume neither are leap years (hence 2025 for both) since we have 730 days total, not 731
-    train_ts, test_ts = track_month(train_ts, year=2025), track_month(test_ts, year=2025)
+    # perform feature engineering based on config
+    # TODO: track total feature engineering time in seconds
+    for func_name in config:
+        # check if there's a feature engineering function associated with this name
+        if func_name not in registered_fe_funcs:
+            raise Exception(f'Unknown/unsupported feature engineering function {func_name}')
+        func = registered_fe_funcs[func_name]
 
-    # track the season (winter, spring, etc.) as a categorical feature
-    train_ts, test_ts = track_season(train_ts), track_season(test_ts)
+        # get the parameters to pass into the function (assumed to be a dict)
+        params = config[func_name]
 
-    # track the (average) hourly precipitation for each day (in mm, since we're using CHIRPS data) as a numerical feature
-    train_ts, test_ts = track_hourly_precip(train_ts), track_hourly_precip(test_ts)
-
-    # track the daily precipitation intensity based on the hourly precipitation rate as a categorical feature
-    train_ts, test_ts = track_daily_precip_intensity(train_ts), track_daily_precip_intensity(test_ts)
-
-    # track the running total of daily precipitation for each month as a numerical feature
-    train_ts = track_total_monthly_precip(train_ts)
-    test_ts = track_total_monthly_precip(test_ts)
-
-    # track the running average of daily precipitation for each month as a numerical feature
-    train_ts = track_avg_monthly_precip(train_ts)
-    test_ts = track_avg_monthly_precip(test_ts)
+        # call the function on both timeseries using the same params, unpacked from the dict
+        print(f'Adding feature {func_name} to train timeseries...')
+        train_ts = func(train_ts, **params)
+        print(f'Adding feature {func_name} to test timeseries...')
+        test_ts = func(test_ts, **params)
 
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))

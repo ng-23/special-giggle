@@ -31,11 +31,13 @@ pyparsing==3.2.1
 python-dateutil==2.9.0.post0
 pytz==2024.2
 pyzmq==26.2.0
+scipy==1.15.1
 six==1.17.0
--e git+https://github.com/ng-23/special-giggle.git@1cebd16f701297fa80baea5b38b1b47bbcb95c82#egg=special_giggle
+-e git+https://github.com/ng-23/special-giggle.git@8ba6d238d0e6259f20880df9d30d35deee427ec3#egg=special_giggle
 stack-data==0.6.3
 tornado==6.4.2
 tqdm==4.67.1
 traitlets==5.14.3
 tzdata==2024.2
 wcwidth==0.2.13
+xgboost==2.1.3

@@ -8,21 +8,29 @@ import argparse
 import json
 import os
 import pandas as pd
+import time
 from special_giggle import utils
 
 # runtime config, maps a feature engineering function name to a dict of its arguments
 DEFAULT_CONFIG = {
     'month': {},
     'season': {},
-    'hourly_precip': {},
-    'daily_precip_intensity': {},
-    'total_monthly_precip': {},
-    'avg_daily_precip': {},
+    'precip_1H': {},
+    'precip_intensity_1d': {},
+    'cum_sum_precip_1d': {},
+    'cum_avg_precip_1d': {},
+    'prev_sum_precip_1d': {'days':7},
+    'prev_avg_precip_1d': {'days':7},
 }
 
 registered_fe_funcs = {} # maps a function name to a feature engineering function
 
 def register_fe_func(func_name:str):
+    '''
+    Registers a function as a feature engineering function
+
+    See https://www.programiz.com/python-programming/decorator
+    '''
     def decorator(func):
         registered_fe_funcs[func_name] = func
         return func
@@ -108,6 +116,7 @@ def month(ts:pd.DataFrame, year=2025):
     if 'event_t' not in ts: raise Exception('Missing required column - event_t')
     
     ts['month'] = [utils.get_month_from_year_day(year, day) for day in ts['event_t']]
+    ts['month'] = ts['month'].astype('category')
 
     return ts
 
@@ -124,10 +133,11 @@ def season(ts:pd.DataFrame):
     if 'month' not in ts: raise Exception('Missing required column - month')
     
     ts['season'] = [utils.get_season_from_month(month) for month in ts['month']]
+    ts['season'] = ts['season'].astype('category')
 
     return ts
 
-@register_fe_func('hourly_precip')
+@register_fe_func('precip_1H')
 def hourly_precip(ts:pd.DataFrame):
     '''
     Derives the hourly precipitation for each day from the total daily (24 hours) precipitation
@@ -139,11 +149,11 @@ def hourly_precip(ts:pd.DataFrame):
 
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
     
-    ts['hourly_precip'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
+    ts['precip_1H'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
 
     return ts
 
-@register_fe_func('daily_precip_intensity')
+@register_fe_func('precip_intensity_1d')
 def daily_precip_intensity(ts:pd.DataFrame):
     '''
     Tracks daily precipitation intensity based on the hourly precipitation for each day
@@ -155,16 +165,17 @@ def daily_precip_intensity(ts:pd.DataFrame):
     Features created: 1
     '''
 
-    if 'hourly_precip' not in ts: raise Exception('Missing required column - hourly_precip')
+    if 'precip_1H' not in ts: raise Exception('Missing required column - precip_1H')
 
-    ts['daily_precip_intensity'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['hourly_precip']]
+    ts['precip_intensity_1d'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['precip_1H']]
+    ts['precip_intensity_1d'] = ts['precip_intensity_1d'].astype('category')
     
     return ts
 
-@register_fe_func('total_monthly_precip')
-def total_monthly_precip(ts:pd.DataFrame):
+@register_fe_func('cum_sum_precip_1d')
+def expanding_sum_daily_precip(ts:pd.DataFrame):
     '''
-    Tracks the running total of daily precipitation for each month
+    Tracks the cumulative total of daily precipitation for each month
 
     Feature type: numerical
 
@@ -182,17 +193,17 @@ def total_monthly_precip(ts:pd.DataFrame):
         y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
 
         # create new column in each dataframe to store the cumulative sume of the daily precipitation for each month
-        y1_data['total_monthly_precip'] = y1_data.groupby(['month'], sort=False)['precipitation'].cumsum()
-        y2_data['total_monthly_precip'] = y2_data.groupby(['month'], sort=False)['precipitation'].cumsum()
+        y1_data['cum_sum_precip_1d'] = y1_data.groupby(['month'], sort=False, observed=True)['precipitation'].cumsum()
+        y2_data['cum_sum_precip_1d'] = y2_data.groupby(['month'], sort=False, observed=True)['precipitation'].cumsum()
 
         temp_dfs.append(y1_data); temp_dfs.append(y2_data)
 
     return pd.concat(temp_dfs, axis=0) # vertically concatenate y1/y2 dataframes for each event id
 
-@register_fe_func('avg_daily_precip')
-def avg_daily_precip(ts:pd.DataFrame):
+@register_fe_func('cum_avg_precip_1d')
+def expanding_avg_daily_precip(ts:pd.DataFrame):
     '''
-    Tracks the running average of daily precipitation for each month
+    Tracks the cumulative average of daily precipitation for each month
 
     Feature type: numerical
 
@@ -209,15 +220,15 @@ def avg_daily_precip(ts:pd.DataFrame):
         y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
 
         # see https://stackoverflow.com/a/56911728/ and https://stackoverflow.com/a/58851846/
-        y1_data = y1_data.assign(avg_monthly_precip = y1_data.groupby(['month'], sort=False)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
-        y2_data = y2_data.assign(avg_monthly_precip = y2_data.groupby(['month'], sort=False)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
+        y1_data = y1_data.assign(cum_avg_precip_1d = y1_data.groupby(['month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
+        y2_data = y2_data.assign(cum_avg_precip_1d = y2_data.groupby(['month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
 
         temp_dfs.append(y1_data); temp_dfs.append(y2_data)
 
     return pd.concat(temp_dfs, axis=0)
 
-@register_fe_func('rolling_total_daily_precip')
-def rolling_total_daily_precip(ts:pd.DataFrame, days:int):
+@register_fe_func('prev_sum_precip_1d')
+def rolling_sum_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling total of daily precipitation for a given number of past days
 
@@ -225,10 +236,13 @@ def rolling_total_daily_precip(ts:pd.DataFrame, days:int):
 
     Features created: 1
     '''
-    pass
 
-@register_fe_func('rolling_avg_daily_precip')
-def rolling_avg_daily_precip(ts:pd.DataFrame, months:int):
+    if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
+
+    return ts.assign(temp = ts['precipitation'].rolling(window=days, min_periods=1).sum()).rename(columns={'temp':f'prev_{days}d_sum_precip_1d'})
+
+@register_fe_func('prev_avg_precip_1d')
+def rolling_avg_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling average of daily precipitation for a given number of past days
 
@@ -236,27 +250,28 @@ def rolling_avg_daily_precip(ts:pd.DataFrame, months:int):
 
     Features created: 1
     '''
-    pass
+    
+    if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
 
-def lagged_daily_precip_intensity():
+    return ts.assign(temp = ts['precipitation'].rolling(days, min_periods=1).mean()).rename(columns={'temp':f'prev_{days}d_avg_precip_1d'})
+
+@register_fe_func('prev_precip_intensity_1d')
+def rolling_mode_daily_precip_intensity(ts:pd.DataFrame, days:int):
     '''
-    Tracks the daily precipitation intensity for a given number of past days
+    Tracks the most common daily precipitation intensity for a given number of past days
 
     Feature type: categorical
 
-    Features created: variable
-    '''
-    pass
-
-def rolling_total_monthly_precip():
-    '''
-    Tracks the total precipitation for a given number of past months
-
-    Feature type: numerical
-
     Features created: 1
     '''
-    pass
+    
+    if 'precip_intensity_1d' not in ts: raise Exception('Missing required column - precip_intensity_1d')
+
+    # see https://stackoverflow.com/a/73241183/ and https://pandas.pydata.org/docs/user_guide/categorical.html
+    return ts.assign(temp = pd.Categorical.from_codes(
+        ts['precip_intensity_1d'].cat.codes.rolling(days, min_periods=1).apply(lambda x: x.mode()[0]).astype('int8'),
+        ts['precip_intensity_1d'].unique()),
+    ).rename(columns={'temp':f'prev_{days}d_precip_intensity_1d'})
 
 def main(args:argparse.Namespace):
     '''
@@ -286,7 +301,7 @@ def main(args:argparse.Namespace):
     train_ts, test_ts = init_ts(args.train_ts_path), init_ts(args.test_ts_path)
 
     # perform feature engineering based on config
-    # TODO: track total feature engineering time in seconds
+    total_time = 0.0
     for func_name in config:
         # check if there's a feature engineering function associated with this name
         if func_name not in registered_fe_funcs:
@@ -298,9 +313,20 @@ def main(args:argparse.Namespace):
 
         # call the function on both timeseries using the same params, unpacked from the dict
         print(f'Adding feature {func_name} to train timeseries...')
+        start_time = time.time()
         train_ts = func(train_ts, **params)
+        end_time = time.time()
+        print(f'Took {end_time-start_time} seconds')
+        total_time += (end_time-start_time)
+        
         print(f'Adding feature {func_name} to test timeseries...')
+        start_time = time.time()
         test_ts = func(test_ts, **params)
+        end_time = time.time()
+        print(f'Took {end_time-start_time} seconds')
+        total_time += (end_time-start_time)
+        print("-"*75)
+    print(f'Finished feature engineering - took {total_time} seconds')
 
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))

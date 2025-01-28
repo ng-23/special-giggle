@@ -19,8 +19,8 @@ DEFAULT_CONFIG = {
     'precip_intensity_1d': {},
     'cum_sum_precip_1d': {},
     'cum_avg_precip_1d': {},
-    'prev_sum_precip_1d': {'days':7},
-    'prev_avg_precip_1d': {'days':7},
+    'lag_cum_sum_precip_1d': {'days':7},
+    'lag_cum_avg_precip_1d': {'days':7},
 }
 
 registered_fe_funcs = {} # maps a function name to a feature engineering function
@@ -91,7 +91,7 @@ def init_ts(filepath:str):
 
     # each event is of the format id_location_X_timestamp
     # we wish to separate the event identifier (aka the location) from the timestamp
-    ts['event_id'] = ['_'.join(event_str.split('_')[0:2]) for event_str in ts['event_id']]
+    ts['event_id'] = sorted(['_'.join(event_str.split('_')[0:2]) for event_str in ts['event_id']])
 
     # at this point the event identifier (location) is separate from the timestamp
     # but in the process we've lost the timestamp, so we need to get it back
@@ -173,7 +173,7 @@ def daily_precip_intensity(ts:pd.DataFrame):
     return ts
 
 @register_fe_func('cum_sum_precip_1d')
-def expanding_sum_daily_precip(ts:pd.DataFrame):
+def cum_sum_daily_precip(ts:pd.DataFrame):
     '''
     Tracks the cumulative total of daily precipitation for each month
 
@@ -182,26 +182,16 @@ def expanding_sum_daily_precip(ts:pd.DataFrame):
     Features created: 1
     '''
 
-    event_ids = ts['event_id'].unique() # get all event ids
+    y1_data = ts.loc[(ts['event_t'] <= 364)].copy() # see https://stackoverflow.com/a/66362915
+    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
-    temp_dfs = []
+    y1_data['cum_sum_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
+    y2_data['cum_sum_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
 
-    # TODO: this is slow - is there any way to speed it up?
-    for event_id in event_ids:
-        # separating y1 and y2 data for event_id into 2 different dataframes for further processing
-        y1_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] <= 364)].copy() # see https://stackoverflow.com/a/66362915
-        y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
-
-        # create new column in each dataframe to store the cumulative sume of the daily precipitation for each month
-        y1_data['cum_sum_precip_1d'] = y1_data.groupby(['month'], sort=False, observed=True)['precipitation'].cumsum()
-        y2_data['cum_sum_precip_1d'] = y2_data.groupby(['month'], sort=False, observed=True)['precipitation'].cumsum()
-
-        temp_dfs.append(y1_data); temp_dfs.append(y2_data)
-
-    return pd.concat(temp_dfs, axis=0) # vertically concatenate y1/y2 dataframes for each event id
+    return pd.concat([y1_data, y2_data], axis=0) # vertically concatenate y1/y2 dataframes for each event id
 
 @register_fe_func('cum_avg_precip_1d')
-def expanding_avg_daily_precip(ts:pd.DataFrame):
+def cum_avg_daily_precip(ts:pd.DataFrame):
     '''
     Tracks the cumulative average of daily precipitation for each month
 
@@ -210,25 +200,17 @@ def expanding_avg_daily_precip(ts:pd.DataFrame):
     Features created: 1
     '''
     
-    event_ids = ts['event_id'].unique()
+    y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
+    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
-    temp_dfs = []
+    # see https://stackoverflow.com/a/56911728/ and https://stackoverflow.com/a/58851846/
+    y1_data['cum_avg_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
+    y2_data['cum_avg_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
 
-    # TODO: this is slow - is there any way to speed it up?
-    for event_id in event_ids:
-        y1_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] <= 364)].copy()
-        y2_data = ts.loc[(ts['event_id'] == event_id) & (ts['event_t'] > 364)].copy()
+    return pd.concat([y1_data, y2_data], axis=0)
 
-        # see https://stackoverflow.com/a/56911728/ and https://stackoverflow.com/a/58851846/
-        y1_data = y1_data.assign(cum_avg_precip_1d = y1_data.groupby(['month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
-        y2_data = y2_data.assign(cum_avg_precip_1d = y2_data.groupby(['month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(drop=True))
-
-        temp_dfs.append(y1_data); temp_dfs.append(y2_data)
-
-    return pd.concat(temp_dfs, axis=0)
-
-@register_fe_func('prev_sum_precip_1d')
-def rolling_sum_daily_precip(ts:pd.DataFrame, days:int):
+@register_fe_func('lag_cum_sum_precip_1d')
+def lag_cum_sum_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling total of daily precipitation for a given number of past days
 
@@ -239,10 +221,16 @@ def rolling_sum_daily_precip(ts:pd.DataFrame, days:int):
 
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
 
-    return ts.assign(temp = ts['precipitation'].rolling(window=days, min_periods=1).sum()).rename(columns={'temp':f'prev_{days}d_sum_precip_1d'})
+    col_name = f'lag_{days}d_cum_sum_precip_1d'
 
-@register_fe_func('prev_avg_precip_1d')
-def rolling_avg_daily_precip(ts:pd.DataFrame, days:int):
+    lag_data = ts.groupby(['event_id'])['precipitation'].rolling(window=days, min_periods=1).sum().reset_index(level=[0], drop=True)
+
+    ts[col_name] = lag_data
+
+    return ts
+
+@register_fe_func('lag_cum_avg_precip_1d')
+def lag_cum_avg_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling average of daily precipitation for a given number of past days
 
@@ -253,25 +241,13 @@ def rolling_avg_daily_precip(ts:pd.DataFrame, days:int):
     
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
 
-    return ts.assign(temp = ts['precipitation'].rolling(days, min_periods=1).mean()).rename(columns={'temp':f'prev_{days}d_avg_precip_1d'})
+    col_name = f'lag_{days}d_cum_avg_precip_1d'
 
-@register_fe_func('prev_precip_intensity_1d')
-def rolling_mode_daily_precip_intensity(ts:pd.DataFrame, days:int):
-    '''
-    Tracks the most common daily precipitation intensity for a given number of past days
+    lag_data = ts.groupby(['event_id'])['precipitation'].rolling(window=days, min_periods=1).mean().reset_index(level=[0], drop=True)
 
-    Feature type: categorical
+    ts[col_name] = lag_data
 
-    Features created: 1
-    '''
-    
-    if 'precip_intensity_1d' not in ts: raise Exception('Missing required column - precip_intensity_1d')
-
-    # see https://stackoverflow.com/a/73241183/ and https://pandas.pydata.org/docs/user_guide/categorical.html
-    return ts.assign(temp = pd.Categorical.from_codes(
-        ts['precip_intensity_1d'].cat.codes.rolling(days, min_periods=1).apply(lambda x: x.mode()[0]).astype('int8'),
-        ts['precip_intensity_1d'].unique()),
-    ).rename(columns={'temp':f'prev_{days}d_precip_intensity_1d'})
+    return ts
 
 def main(args:argparse.Namespace):
     '''
@@ -300,6 +276,11 @@ def main(args:argparse.Namespace):
     # initialize train/test timeseries dataframes
     train_ts, test_ts = init_ts(args.train_ts_path), init_ts(args.test_ts_path)
 
+    # reorder train/test timeseries by event_t to better capture temporal structure
+    # sort event_id alphabetically just for neatness
+    train_ts = train_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
+    test_ts = test_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
+
     # perform feature engineering based on config
     total_time = 0.0
     for func_name in config:
@@ -327,6 +308,10 @@ def main(args:argparse.Namespace):
         total_time += (end_time-start_time)
         print("-"*75)
     print(f'Finished feature engineering - took {total_time} seconds')
+
+    # move event_t column to very front just for neatness in train/test timeseries
+    train_ts.insert(0, 'event_t', train_ts.pop('event_t'))
+    test_ts.insert(0, 'event_t', test_ts.pop('event_t'))
 
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))

@@ -20,7 +20,6 @@ DEFAULT_CONFIG = {
     'cum_sum_precip_1d': {},
     'cum_avg_precip_1d': {},
     'cum_avg_precip_1H': {},
-    'cum_std_precip_1d': {},
     'lag_cum_sum_precip_1d': {'days':3},
     'lag_cum_avg_precip_1d': {'days':3},
     'lag_cum_avg_precip_1H': {'days':3},
@@ -382,11 +381,6 @@ def main(args:argparse.Namespace):
     # initialize train/test timeseries dataframes
     train_ts, test_ts = init_ts(args.train_ts_path), init_ts(args.test_ts_path)
 
-    # reorder train/test timeseries by event_t to better capture temporal structure
-    # sort event_id alphabetically just for neatness
-    train_ts = train_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
-    test_ts = test_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
-
     # perform feature engineering based on config
     total_time = 0.0
     for func_name in config:
@@ -421,6 +415,11 @@ def main(args:argparse.Namespace):
 
     # move label (flood/no flood) column to very end just for neatness in train timeseries
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))
+
+    # reorder train/test timeseries by event_t to better capture temporal structure
+    # sort event_id alphabetically just for neatness
+    train_ts = train_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
+    test_ts = test_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
 
     # save feature-engineered timeseries dataframes to disk as CSV files and print first couple rows
     train_ts.to_csv(path_or_buf=os.path.join(output_dir, 'train_ts.csv'), index=False)

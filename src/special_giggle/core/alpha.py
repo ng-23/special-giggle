@@ -124,7 +124,7 @@ class AlphaObjective():
         # get column names of input features
         feature_cols = [col for col in self.ts.columns if col not in {'label','event_t','event_id'}]
 
-        val_metrics = {}
+        val_metrics = {'fold':[], 'log_loss':[]}
 
         for i, (train_index, test_index) in enumerate(self.tscv.split(self.days)):
             # see https://xgboost.readthedocs.io/en/latest/parameter.html#learning-task-parameters
@@ -153,14 +153,17 @@ class AlphaObjective():
 
             # get val metrics and store for later
             fold_metrics = model.evals_result()
-            val_metrics[f'fold{i}_log_loss'] = [fold_metrics['validation_0']['logloss'][-1]]
+            val_metrics['fold'].append(i)
+            val_metrics['log_loss'].append(fold_metrics['validation_0']['logloss'][-1])
 
-            print(f'Validation metrics: {val_metrics[f'fold{i}_log_loss']}\n{'-'*75}')
+            print(f'Validation log loss: {val_metrics['log_loss'][-1]}')
 
         # compute average log loss across all folds
-        val_metrics['avg_log_loss'] = [np.mean(list(val_metrics.values()))]
+        val_metrics = pd.DataFrame.from_dict(val_metrics)
+        val_metrics['avg_log_loss'] = val_metrics.expanding(min_periods=1)['log_loss'].mean()
+        print(f'Average validation log loss: {val_metrics.loc[len(val_metrics)-1]['avg_log_loss']}\n{'-'*75}')
 
-        return pd.DataFrame.from_dict(val_metrics)
+        return val_metrics
 
     def get_metrics(self, trial:op.Trial):
         '''
@@ -205,7 +208,7 @@ class AlphaObjective():
 
         self.save_trial(trial, output_dir=self.output_dir)
 
-        return val_metrics['avg_log_loss'].values[0]
+        return val_metrics.loc[len(val_metrics)-1]['avg_log_loss']
 
 def get_args_parser():
     '''
@@ -325,7 +328,7 @@ def main(args:argparse.Namespace):
     # save the best trial's model to disk
     # see https://stackoverflow.com/questions/58149861/dump-xgboost-model-with-feature-map-using-xgbclassifier and https://stackoverflow.com/questions/43691380/how-to-save-load-xgboost-model
     model.save_model(os.path.join(output_dir, f'best_model{study.best_trial.number}.json'))
-    model.get_booster().dump_model(os.path.join(output_dir, f'best_model_dump{study.best_trial.number}.txt'))
+    model.get_booster().dump_model(os.path.join(output_dir, f'best_model{study.best_trial.number}_dump.txt'))
 
 if __name__ == '__main__':
     # entry point if running as a script

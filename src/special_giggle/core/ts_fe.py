@@ -15,14 +15,15 @@ from special_giggle import utils
 DEFAULT_CONFIG = {
     'month': {},
     'season': {},
-    'precip_1H': {},
-    'precip_intensity_1d': {},
-    'cum_sum_precip_1d': {},
-    'cum_avg_precip_1d': {},
-    'cum_avg_precip_1H': {},
-    'lag_cum_sum_precip_1d': {'days':3},
-    'lag_cum_avg_precip_1d': {'days':3},
-    'lag_cum_avg_precip_1H': {'days':3},
+    'l_precip_1H': {},
+    'l_precip_intensity_1d': {},
+    'l_cum_sum_precip_1d': {},
+    'l_cum_avg_precip_1d': {},
+    'l_cum_avg_precip_1H': {},
+    'l_lag_cum_sum_precip_1d': {'days':3},
+    'l_lag_cum_avg_precip_1d': {'days':3},
+    'l_lag_cum_avg_precip_1H': {'days':3},
+    'g_cum_sum_precip_1d': {},
 }
 
 registered_fe_funcs = {} # maps a function name to a feature engineering function
@@ -139,8 +140,8 @@ def season(ts:pd.DataFrame):
 
     return ts
 
-@register_fe_func('precip_1H')
-def hourly_precip(ts:pd.DataFrame):
+@register_fe_func('l_precip_1H')
+def local_hourly_precip(ts:pd.DataFrame):
     '''
     Derives the hourly precipitation for each day from the total daily (24 hours) precipitation
 
@@ -151,12 +152,12 @@ def hourly_precip(ts:pd.DataFrame):
 
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
     
-    ts['precip_1H'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
+    ts['l_precip_1H'] = [daily_precip / 24.0 for daily_precip in ts['precipitation']]
 
     return ts
 
-@register_fe_func('precip_intensity_1d')
-def daily_precip_intensity(ts:pd.DataFrame):
+@register_fe_func('l_precip_intensity_1d')
+def local_daily_precip_intensity(ts:pd.DataFrame):
     '''
     Tracks daily precipitation intensity based on the hourly precipitation for each day
 
@@ -167,46 +168,15 @@ def daily_precip_intensity(ts:pd.DataFrame):
     Features created: 1
     '''
 
-    if 'precip_1H' not in ts: raise Exception('Missing required column - precip_1H')
+    if 'l_precip_1H' not in ts: raise Exception('Missing required column - l_precip_1H')
 
-    ts['precip_intensity_1d'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['precip_1H']]
-    ts['precip_intensity_1d'] = ts['precip_intensity_1d'].astype('category')
+    ts['l_precip_intensity_1d'] = [utils.get_precip_intensity(hourly_precip) for hourly_precip in ts['l_precip_1H']]
+    ts['l_precip_intensity_1d'] = ts['l_precip_intensity_1d'].astype('category')
     
     return ts
 
-@register_fe_func('std_precip_1d')
-def std_daily_precip(ts:pd.DataFrame):
-    '''
-    Tracks the standard deviation of daily precipitation for each month, grouped by event_id and separate for y1/y2
-
-    Feature type: numerical
-
-    Features created: 1
-    '''
-
-    y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
-    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
-
-    # TODO: this seems to produce NaNs - how to fix?
-    y1_data['std_precip_1d'] = y1_data.groupby(['event_id','month'])['precipitation'].std().reset_index(level=[0,1], drop=True)
-    y2_data['std_precip_1d'] = y2_data.groupby(['event_id','month'])['precipitation'].std().reset_index(level=[0,1], drop=True)
-
-    return pd.concat([y1_data,y2_data], axis=0) # vertically concatenate y1/y2 dataframes
-
-@register_fe_func('std_precip_1H')
-def std_hourly_precip(ts:pd.DataFrame):
-    '''
-    Tracks the standard deviation of hourly precipitation for each month, grouped by event_id and separate for y1/y2
-
-    Feature type: numerical
-
-    Features created: 1
-    '''
-
-    pass
-
-@register_fe_func('cum_sum_precip_1d')
-def cum_sum_daily_precip(ts:pd.DataFrame):
+@register_fe_func('l_cum_sum_precip_1d')
+def local_cum_sum_daily_precip(ts:pd.DataFrame):
     '''
     Tracks the cumulative total of daily precipitation for each month, grouped by event_id and separate for y1/y2
 
@@ -218,13 +188,13 @@ def cum_sum_daily_precip(ts:pd.DataFrame):
     y1_data = ts.loc[(ts['event_t'] <= 364)].copy() # see https://stackoverflow.com/a/66362915
     y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
-    y1_data['cum_sum_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
-    y2_data['cum_sum_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
+    y1_data['l_cum_sum_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
+    y2_data['l_cum_sum_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).sum().reset_index(level=[0,1], drop=True)
 
     return pd.concat([y1_data, y2_data], axis=0)
 
-@register_fe_func('cum_avg_precip_1d')
-def cum_avg_daily_precip(ts:pd.DataFrame):
+@register_fe_func('l_cum_avg_precip_1d')
+def local_cum_avg_daily_precip(ts:pd.DataFrame):
     '''
     Tracks the cumulative average of daily precipitation for each month, grouped by event_id and separate for y1/y2
 
@@ -237,13 +207,13 @@ def cum_avg_daily_precip(ts:pd.DataFrame):
     y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
     # see https://stackoverflow.com/a/56911728/ and https://stackoverflow.com/a/58851846/
-    y1_data['cum_avg_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
-    y2_data['cum_avg_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
+    y1_data['l_cum_avg_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
+    y2_data['l_cum_avg_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
 
     return pd.concat([y1_data, y2_data], axis=0)
 
-@register_fe_func('cum_avg_precip_1H')
-def cum_avg_hourly_precip(ts:pd.DataFrame):
+@register_fe_func('l_cum_avg_precip_1H')
+def local_cum_avg_hourly_precip(ts:pd.DataFrame):
     '''
     Tracks the cumulative average of hourly precipitation for each month, grouped by event_id and separate for y1/y2
 
@@ -255,47 +225,13 @@ def cum_avg_hourly_precip(ts:pd.DataFrame):
     y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
     y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
-    y1_data['cum_avg_precip_1H'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precip_1H'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
-    y2_data['cum_avg_precip_1H'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precip_1H'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
+    y1_data['l_cum_avg_precip_1H'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['l_precip_1H'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
+    y2_data['l_cum_avg_precip_1H'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['l_precip_1H'].expanding(min_periods=1).mean().reset_index(level=[0,1], drop=True)
 
     return pd.concat([y1_data, y2_data], axis=0)
 
-@register_fe_func('cum_std_precip_1d')
-def cum_std_daily_precip(ts:pd.DataFrame):
-    '''
-    Tracks the cumulative standard deviation of daily precipitation for each month, grouped by event_id and separate for y1/y2
-
-    Feature type: numerical
-
-    Features created: 1
-    '''
-
-    y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
-    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
-
-    # TODO: what's the best way to fill NaNs?
-    y1_data['cum_std_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).std().reset_index(level=[0,1], drop=True)
-    y1_data['cum_std_precip_1d'] = y1_data['cum_std_precip_1d'].fillna(y1_data.groupby(['event_id','month'], sort=False, observed=True)['cum_std_precip_1d'].median().reset_index(level=[0,1], drop=True))
-    
-    y2_data['cum_std_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['precipitation'].expanding(min_periods=1).std().reset_index(level=[0,1], drop=True)
-    y2_data['cum_std_precip_1d'] = y2_data['cum_std_precip_1d'].fillna(y1_data.groupby(['event_id','month'], sort=False, observed=True)['cum_std_precip_1d'].median().reset_index(level=[0,1], drop=True))
-
-    return pd.concat([y1_data, y2_data], axis=0)
-
-@register_fe_func('cum_std_precip_1H')
-def cum_std_hourly_precip(ts:pd.DataFrame):
-    '''
-    Tracks the cumulative standard deviation of hourly precipitation 
-
-    Feature type: numerical
-
-    Features created: 1
-    '''
-
-    pass
-
-@register_fe_func('lag_cum_sum_precip_1d')
-def lag_cum_sum_daily_precip(ts:pd.DataFrame, days:int):
+@register_fe_func('l_lag_cum_sum_precip_1d')
+def local_lag_cum_sum_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling total of daily precipitation for a given number of past days, grouped by event_id
 
@@ -306,7 +242,7 @@ def lag_cum_sum_daily_precip(ts:pd.DataFrame, days:int):
 
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
 
-    col_name = f'lag_{days}d_cum_sum_precip_1d'
+    col_name = f'l_{days}d_cum_sum_precip_1d'
 
     lag_data = ts.groupby(['event_id'])['precipitation'].rolling(window=days, min_periods=1).sum().reset_index(level=[0], drop=True)
 
@@ -314,8 +250,8 @@ def lag_cum_sum_daily_precip(ts:pd.DataFrame, days:int):
 
     return ts
 
-@register_fe_func('lag_cum_avg_precip_1d')
-def lag_cum_avg_daily_precip(ts:pd.DataFrame, days:int):
+@register_fe_func('l_lag_cum_avg_precip_1d')
+def local_lag_cum_avg_daily_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling average of daily precipitation for a given number of past days, grouped by event_id
 
@@ -326,7 +262,7 @@ def lag_cum_avg_daily_precip(ts:pd.DataFrame, days:int):
     
     if 'precipitation' not in ts: raise Exception('Missing required column - precipitation')
 
-    col_name = f'lag_{days}d_cum_avg_precip_1d'
+    col_name = f'l_{days}d_cum_avg_precip_1d'
 
     lag_data = ts.groupby(['event_id'])['precipitation'].rolling(window=days, min_periods=1).mean().reset_index(level=[0], drop=True)
 
@@ -334,8 +270,8 @@ def lag_cum_avg_daily_precip(ts:pd.DataFrame, days:int):
 
     return ts
 
-@register_fe_func('lag_cum_avg_precip_1H')
-def lag_cum_avg_hourly_precip(ts:pd.DataFrame, days:int):
+@register_fe_func('l_lag_cum_avg_precip_1H')
+def local_lag_cum_avg_hourly_precip(ts:pd.DataFrame, days:int):
     '''
     Tracks the rolling average of hourly precipitation for a given number of past days, grouped by event_id
 
@@ -344,15 +280,42 @@ def lag_cum_avg_hourly_precip(ts:pd.DataFrame, days:int):
     Features created: 1
     '''
 
-    if 'precip_1H' not in ts: raise Exception('Missing required column - precip_1H')
+    if 'l_precip_1H' not in ts: raise Exception('Missing required column - l_precip_1H')
 
-    col_name = f'lag_{days}d_cum_avg_precip_1H'
+    col_name = f'l_{days}d_cum_avg_precip_1H'
 
-    lag_data = ts.groupby(['event_id'])['precip_1H'].rolling(window=days, min_periods=1).mean().reset_index(level=[0], drop=True)
+    lag_data = ts.groupby(['event_id'])['l_precip_1H'].rolling(window=days, min_periods=1).mean().reset_index(level=[0], drop=True)
 
     ts[col_name] = lag_data
 
     return ts
+
+@register_fe_func('g_cum_sum_precip_1d')
+def global_cum_sum_daily_precip(ts:pd.DataFrame):
+    '''
+    Tracks the cumulative total of precipitation across all locations for each month, separate for y1/y2
+
+    Feature type: numerical
+
+    Features created: 1
+    '''
+
+    y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
+    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
+
+    # calculate the total daily precipitation across all locations for each event_t, 1 value for each event_t
+    y1_sum_daily_precip = y1_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].sum()
+    y2_sum_daily_precip = y2_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].sum()
+
+    # calculate the cumulative sum of the total daily precipitation for each event_t, 1 value for each event_t
+    y1_cum_sum_daily_precip = y1_sum_daily_precip.groupby(['month'], sort=False, observed=True).cumsum().reset_index(level=[0], drop=True)
+    y2_cum_sum_daily_precip = y2_sum_daily_precip.groupby(['month'], sort=False, observed=True).cumsum().reset_index(level=[0], drop=True)
+
+    # map the cumulative total daily precipitation to each event_t row
+    y1_data['g_cum_sum_precip_1d'] = y1_data['event_t'].map(y1_cum_sum_daily_precip)
+    y2_data['g_cum_sum_precip_1d'] = y2_data['event_t'].map(y2_cum_sum_daily_precip)
+
+    return pd.concat([y1_data, y2_data], axis=0)
 
 def main(args:argparse.Namespace):
     '''

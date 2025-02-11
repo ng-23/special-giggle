@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     'l_lag_cum_sum_precip_1d': {'days':3},
     'l_lag_cum_avg_precip_1d': {'days':3},
     'l_lag_cum_avg_precip_1H': {'days':3},
+    'r_cum_sum_precip_1d': {},
     'g_cum_sum_precip_1d': {},
 }
 
@@ -371,40 +372,68 @@ def cluster_locations(train_ts:pd.DataFrame, test_ts:pd.DataFrame, n_regions:int
 
         if col == 'id':
             test_ts[col] -= train_ts['id'].max()+1
-            test_ts[col] = test_le.inverse_transform(test_ts[col])
-            test_ts[col] = test_ts[col].astype('category')
+            
+        test_ts[col] = test_le.inverse_transform(test_ts[col])
+        test_ts[col] = test_ts[col].astype('category')
 
-            train_ts[col] = train_le.inverse_transform(train_ts[col])
-            train_ts[col] = train_ts[col].astype('category')
+        train_ts[col] = train_le.inverse_transform(train_ts[col])
+        train_ts[col] = train_ts[col].astype('category')
 
     train_ts, test_ts = train_ts.rename(columns={'time':'event_t', 'id':'event_id'}), test_ts.rename(columns={'time':'event_t', 'id':'event_id'})
 
     return train_ts, test_ts, ts_kmeans
 
-@register_fe_func('g_cum_sum_precip_1d')
-def global_cum_sum_daily_precip(ts:pd.DataFrame):
+@register_fe_func('r_cum_sum_precip_1d')
+def regional_cum_sum_daily_precip(ts:pd.DataFrame, keep_sum_daily_precip:bool=True):
     '''
-    Tracks the cumulative total of precipitation across all locations, grouped by month and separate for y1/y2
+    Tracks the cumulative total of precipitation across all locations in a region, grouped by month and separate for y1/y2
+
+    If `keep_sum_daily_precip` is true, additional feature for regional sum of daily precipitation will be created, separate for y1/y2
 
     Feature type: numerical
 
-    Features created: 1
+    Features created: 1-2
     '''
 
     y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
     y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
-    # calculate the total daily precipitation across all locations for each event_t, 1 value for each event_t
-    y1_sum_daily_precip = y1_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].sum()
-    y2_sum_daily_precip = y2_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].sum()
+    y1_data['r_sum_precip_1d'] = y1_data.groupby(['region','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
+    y2_data['r_sum_precip_1d'] = y2_data.groupby(['region','month','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
+    
+    y1_data['r_cum_sum_precip_1d'] = y1_data.groupby(['event_id','region','month'], sort=False, observed=True)['r_sum_precip_1d'].cumsum()
+    y2_data['r_cum_sum_precip_1d'] = y2_data.groupby(['event_id','region','month'], sort=False, observed=True)['r_sum_precip_1d'].cumsum()
+    
+    if not keep_sum_daily_precip:
+        y1_data = y1_data.drop(labels=['r_sum_precip_1d'], axis=1)
+        y2_data = y2_data.drop(labels=['r_sum_precip_1d'], axis=1)
 
-    # calculate the cumulative sum of the total daily precipitation for each event_t, 1 value for each event_t
-    y1_cum_sum_daily_precip = y1_sum_daily_precip.groupby(['month'], sort=False, observed=True).cumsum().reset_index(level=[0], drop=True)
-    y2_cum_sum_daily_precip = y2_sum_daily_precip.groupby(['month'], sort=False, observed=True).cumsum().reset_index(level=[0], drop=True)
+    return pd.concat([y1_data, y2_data], axis=0)
 
-    # map the cumulative total daily precipitation to each event_t row
-    y1_data['g_cum_sum_precip_1d'] = y1_data['event_t'].map(y1_cum_sum_daily_precip)
-    y2_data['g_cum_sum_precip_1d'] = y2_data['event_t'].map(y2_cum_sum_daily_precip)
+@register_fe_func('g_cum_sum_precip_1d')
+def global_cum_sum_daily_precip(ts:pd.DataFrame, keep_sum_daily_precip:bool=True):
+    '''
+    Tracks the cumulative total of precipitation across all locations, grouped by month and separate for y1/y2
+
+    If `keep_sum_daily_precip` is true, additional feature for regional sum of daily precipitation will be created, separate for y1/y2
+
+    Feature type: numerical
+
+    Features created: 1-2
+    '''
+
+    y1_data = ts.loc[(ts['event_t'] <= 364)].copy()
+    y2_data = ts.loc[(ts['event_t'] > 364)].copy()
+
+    y1_data['g_sum_precip_1d'] = y1_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
+    y2_data['g_sum_precip_1d'] = y2_data.groupby(['month','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
+
+    y1_data['g_cum_sum_precip_1d'] = y1_data.groupby(['event_id','month'], sort=False, observed=True)['g_sum_precip_1d'].cumsum()
+    y2_data['g_cum_sum_precip_1d'] = y2_data.groupby(['event_id','month'], sort=False, observed=True)['g_sum_precip_1d'].cumsum()
+    
+    if not keep_sum_daily_precip:
+        y1_data = y1_data.drop(labels=['g_sum_precip_1d'], axis=1)
+        y2_data = y2_data.drop(labels=['g_sum_precip_1d'], axis=1)
 
     return pd.concat([y1_data, y2_data], axis=0)
 
@@ -478,9 +507,17 @@ def main(args:argparse.Namespace):
 
     if args.cluster_locations >= 2:
         # perform k-means clustering on locations so we can engineer so-called regional features
+        print('Performing k_means clustering...')
+        start_time = time.time()
         train_ts, test_ts, clusterer = cluster_locations(train_ts, test_ts, n_regions=args.cluster_locations, seed=args.seed)
+        end_time = time.time()
+        print(f'Took {end_time-start_time} seconds')
+        total_time += (end_time-start_time)
+        
+        # engineer the regional features
         for func_name in regional_feature_funcs:
             params = config[func_name]
+            func = registered_fe_funcs[func_name] # we already know the function is registered at this point
 
             print(f'Adding feature {func_name} to train time series...')
             start_time = time.time()
@@ -506,10 +543,9 @@ def main(args:argparse.Namespace):
     # move label (flood/no flood) column to very end just for neatness in train time series
     train_ts.insert(len(train_ts.columns)-1, 'label', train_ts.pop('label'))
 
-    # reorder train/test time series by event_t to better capture temporal structure
-    # sort event_id alphabetically just for neatness
-    train_ts = train_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
-    test_ts = test_ts.sort_values(by=['event_t','event_id']).reset_index(drop=True)
+    # reorder train/test time series
+    train_ts = train_ts.sort_values(by=['region','event_t']).reset_index(drop=True)
+    test_ts = test_ts.sort_values(by=['region','event_t']).reset_index(drop=True)
 
     # save feature-engineered time series dataframes to disk as CSV files and print first couple rows
     train_ts.to_csv(path_or_buf=os.path.join(output_dir, 'train_ts.csv'), index=False)

@@ -7,14 +7,14 @@ Can be run as a script via command line or imported into other modules.
 import os
 import json
 import argparse
-import numpy as np
 import pandas as pd
 import optuna as op
 import xgboost as xgb
-from special_giggle import utils
+from sklearn.utils import compute_class_weight, compute_sample_weight
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import TimeSeriesSplit
 from special_giggle.core.schemas import validate_config
+from sklearn.metrics import log_loss, precision_score, recall_score, f1_score, roc_auc_score
 
 class AlphaObjective():
     '''
@@ -23,34 +23,38 @@ class AlphaObjective():
     Alpha relies solely on the timeseries precipitation data, assumed to have been feature engineered to include more relevant info.
 
     Per the competition, log-loss is the optimization metric and as such should be minimized
+
+    See https://colab.research.google.com/drive/1wCQw3NTad2S4kXxxAqN0WjORhiqyVV2v?usp=sharing
     '''
 
-    def __init__(self, ts:pd.DataFrame, search_space:dict, seed:int=42, output_dir:str=''):
+    def __init__(self, ts:pd.DataFrame, search_space:dict, use_gpu:bool=False, seed:int=42, output_dir:str=''):
         self.ts = ts
-        self.month_le, self.season_le, self.precip_1d_intensity = self._preprocess_ts()
+        self.ts_les = self._encode_categorical_features()
         self.search_space = self._load_search_space(search_space)
         self.seed = seed
         self.output_dir = output_dir
         self.days = self.ts['event_t'].unique()
         self.tscv = self._init_ts_splitter()
+        self.device = 'cuda' if use_gpu else 'cpu'
 
-    def _preprocess_ts(self):
+    def _encode_categorical_features(self):
         '''
         Preprocess the timeseries data so it can seamlessly be passed into XGBoost Classifier
 
         This mainly entails encoding categorical features
         '''
 
-        month_le = LabelEncoder()
-        self.ts['month'] = month_le.fit_transform(self.ts['month'])
+        feature_cols = [col for col in self.ts.columns if col != 'label'] 
 
-        season_le = LabelEncoder()
-        self.ts['season'] = season_le.fit_transform(self.ts['season'])
+        ts_les = {} # maps a feature (column) name to its label encoder
+        for col in feature_cols:
+            if self.ts[col].dtype == 'object':
+                le = LabelEncoder()
+                self.ts[col] = le.fit_transform(self.ts[col])
 
-        precip_1d_intensity_le = LabelEncoder()
-        self.ts['precip_intensity_1d'] = precip_1d_intensity_le.fit_transform(self.ts['precip_intensity_1d'])
+                ts_les[col] = le
 
-        return month_le, season_le, precip_1d_intensity_le
+        return ts_les
 
     def _load_search_space(self, search_space:dict):
         '''
@@ -71,14 +75,19 @@ class AlphaObjective():
 
         Splits are based on the day (0-729) to preserve temporal structure
 
+        Ensures at least 1 flood event sample is present in each split
+
         Ex:\n
         Split 1: train=[0,1] test=[2]\n
         Split 2: train=[0,1,2] test=[3]\n
         Split 3: train=[0,1,2,3] test=[4]\n
         '''
 
-        # define number of splits (n_days - 1 to ensure at least one test set)
-        n_splits = len(self.days) - 1
+        # determine day of first flood event
+        first_flood_event = self.ts.loc[(self.ts['label'] == 1.0)]['event_t'].min()
+
+        # define number of splits (need to exclude an additional day for the test set)
+        n_splits = len(self.days) - first_flood_event - 1
 
         return TimeSeriesSplit(n_splits=n_splits, test_size=1)
 
@@ -100,6 +109,7 @@ class AlphaObjective():
                     val_search_space['low'], 
                     val_search_space['high'], 
                     log=val_search_space['log'],
+                    step=val_search_space['step'],
                     )
             elif type == 'int':
                 val = trial.suggest_int(
@@ -112,6 +122,20 @@ class AlphaObjective():
 
             hyperparams[param] = val
 
+        # default probability threshold - anything > is positive (1), andthing <= is negative (0)
+        # see https://datascience.stackexchange.com/questions/72296/predict-proba-for-binary-classifier-in-tensorflow
+        if 'proba_threshold' not in hyperparams:
+            hyperparams['proba_threshold'] = 0.5
+
+        # see https://xgboosting.com/xgboost-scale_pos_weight-vs-sample_weight-for-imbalanced-classification/
+        # see https://machinelearningmastery.com/xgboost-for-imbalanced-classification/
+        class_weights = compute_class_weight(class_weight='balanced', classes=self.ts['label'].unique(), y=self.ts['label'])
+        if 'pos_cls_weight' not in hyperparams:
+            #hyperparams['scale_pos_weight'] = len(self.ts.loc[(self.ts['label'] == 0.0)]) / len(self.ts.loc[(self.ts['label'] == 1.0)])
+            hyperparams['pos_cls_weight'] = class_weights[1]
+        if 'neg_cls_weight' not in hyperparams:
+            hyperparams['neg_cls_weight'] = class_weights[0]
+
         return hyperparams
 
     def _train_cv(self, hyperparams:dict):
@@ -121,14 +145,20 @@ class AlphaObjective():
         See https://stackoverflow.com/questions/63224426/how-can-i-cross-validate-by-pytorch-and-optuna
         '''
 
+        proba_threshold = hyperparams.pop('proba_threshold')
+        hyperparams['device'] = self.device
+
+        pos_cls_weight, neg_cls_weight = hyperparams.pop('pos_cls_weight'), hyperparams.pop('neg_cls_weight')
+        hyperparams['scale_pos_weight'] = pos_cls_weight
+
         # get column names of input features
         feature_cols = [col for col in self.ts.columns if col not in {'label','event_t','event_id'}]
 
-        val_metrics = {'fold':[], 'log_loss':[]}
+        val_metrics = {'fold':[], 'log_loss':[], 'precision':[], 'recall':[], 'f1':[], 'roc_auc':[]}
 
         for i, (train_index, test_index) in enumerate(self.tscv.split(self.days)):
             # see https://xgboost.readthedocs.io/en/latest/parameter.html#learning-task-parameters
-            model = xgb.XGBClassifier(**hyperparams, objective='binary:logistic', eval_metric=['logloss'], seed=self.seed)
+            model = xgb.XGBClassifier(**hyperparams, objective='binary:logistic', seed=self.seed)
 
             print(f'Fold: {i}')
 
@@ -136,54 +166,73 @@ class AlphaObjective():
             train_days = self.days[train_index]
             train_set = self.ts[self.ts['event_t'].isin(train_days)]
             X_train, y_train = train_set[feature_cols], train_set['label']
-            print(f'Train days: {train_days}')
+            print(f'Train days: {train_days[0]}-{train_days[-1]}')
 
             # get the validation data 
             val_days = self.days[test_index]
             val_set = self.ts[self.ts['event_t'].isin(val_days)]
             X_val, y_val = val_set[feature_cols], val_set['label']
-            print(f'Validation days: {val_days}')
+            print(f'Validation days: {val_days[0]}')
 
-            # fit model on train data and calculate performance metrics on validation data
-            # see https://datascience.stackexchange.com/questions/87228/output-of-evaluation-metric-for-xgboost-is-it-cumulative
-            # "If verbose is True and an evaluation set is used, the evaluation metric measured on the validation set is printed to stdout at each boosting stage."
-            # "If verbose is an integer, the evaluation metric is printed at each verbose boosting stage."
+            # fit model on train data
             print('Fitting model...')
-            model.fit(X_train, y_train, eval_set=[(X_val,y_val)], verbose=10)
+            model.fit(X_train, y_train)
 
-            # get val metrics and store for later
-            fold_metrics = model.evals_result()
+            # make probability predictions on validation data
+            y_proba = model.predict_proba(X_val)
+
+            # apply thresholding on probability of positive class
+            # to get actual class (0/1) predictions
+            y_pred = [(1.0 if pos_proba > proba_threshold else 0.0) for pos_proba in y_proba[:,1]] # see see https://stackoverflow.com/questions/73582838/what-is-predict-proba-and-1-after-x-test-in-code
+
+            sample_weight = compute_sample_weight(class_weight={0.0: neg_cls_weight, 1.0:pos_cls_weight}, y=y_pred)
+
+            # calc val metrics and store for later
+            # note - i think results are the same for each metric with/without sample_weight parameter
             val_metrics['fold'].append(i)
-            val_metrics['log_loss'].append(fold_metrics['validation_0']['logloss'][-1])
+            val_metrics['log_loss'].append(log_loss(y_val, y_proba, labels=[0.0,1.0], sample_weight=sample_weight))
+            val_metrics['precision'].append(precision_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
+            val_metrics['recall'].append(recall_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
+            val_metrics['f1'].append(f1_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
+            val_metrics['roc_auc'].append(roc_auc_score(y_val, y_proba[:,-1], average='micro', labels=[0.0,1.0]))
 
-            print(f'Validation log loss: {val_metrics['log_loss'][-1]}')
+            # print val metrics for current fold
+            for metric in val_metrics:
+                if metric != 'fold':
+                    print(f'Validation {metric}: {val_metrics[metric][-1]}')
 
-        # compute average log loss across all folds
+        # average val metrics across all folds and print
         val_metrics = pd.DataFrame.from_dict(val_metrics)
-        val_metrics['avg_log_loss'] = val_metrics.expanding(min_periods=1)['log_loss'].mean()
-        print(f'Average validation log loss: {val_metrics.loc[len(val_metrics)-1]['avg_log_loss']}\n{'-'*75}')
+        for col in val_metrics.columns:
+            if col != 'fold':
+                val_metrics[f'avg_{col}'] = val_metrics.expanding(min_periods=1)[col].mean()
+                print(f'Average validation {col}: {val_metrics.loc[len(val_metrics)-1][f'avg_{col}']}')
 
         return val_metrics
-
-    def get_metrics(self, trial:op.Trial):
-        '''
-        Get the performance metrics of the trained XGBoost Classifiers from a completed Optuna trial
-        '''
-
-        return trial.user_attrs['val_metrics_cv']
     
     def refit_model(self, trial:op.Trial):
         '''
         Refits an XGBoost Classifier on all the training data
         '''
 
+        params = trial.params
+        params.pop('proba_threshold')
+        params['device'] = self.device
+
         feature_cols = [col for col in self.ts.columns if col not in {'label','event_t','event_id'}]
         X_train, y_train = self.ts[feature_cols], self.ts['label']
 
-        model = xgb.XGBClassifier(**trial.params, objective='binary:logistic', eval_metric=['logloss'], seed=self.seed)
+        model = xgb.XGBClassifier(**params, objective='binary:logistic', seed=self.seed)
         model.fit(X_train, y_train)
 
         return model
+    
+    def get_metrics(self, trial:op.Trial):
+        '''
+        Get the performance metrics of the trained XGBoost Classifiers from a completed Optuna trial
+        '''
+
+        return trial.user_attrs['val_metrics_cv']
     
     def save_trial(self, trial:op.Trial, output_dir:str=''):
         trial_output_dir = os.path.join(output_dir, f'trial{trial.number}')
@@ -209,7 +258,7 @@ class AlphaObjective():
         self.save_trial(trial, output_dir=self.output_dir)
 
         return val_metrics.loc[len(val_metrics)-1]['avg_log_loss']
-
+    
 def get_args_parser():
     '''
     Creates commandline argument parser
@@ -246,6 +295,12 @@ def get_args_parser():
         type=int, 
         default=10, 
         help='Number of iterations to perform in discovery of optimal hyperparameters',
+        )
+
+    parser.add_argument(
+        '--use-gpu', 
+        action='store_true', 
+        help='If specified, use GPU for training/testing',
         )
     
     parser.add_argument(
@@ -293,7 +348,13 @@ def main(args:argparse.Namespace):
     train_ts = pd.read_csv(args.train_ts_path)
 
     # define objective function to optimize
-    obj = AlphaObjective(train_ts, json.load(open(args.hyperparam_search_space)), seed=args.seed, output_dir=output_dir)
+    obj = AlphaObjective(
+        train_ts, 
+        json.load(open(args.hyperparam_search_space)), 
+        use_gpu=args.use_gpu, 
+        seed=args.seed, 
+        output_dir=output_dir,
+        )
 
     # define the optuna study
     study = op.create_study(

@@ -48,7 +48,7 @@ scikit-learn==1.6.1
 scipy==1.15.1
 setuptools==75.8.0
 six==1.17.0
--e git+https://github.com/ng-23/special-giggle.git@e2558c7afc1223a8caaa9261355d0cd1b8200f3a#egg=special_giggle
+-e git+https://github.com/ng-23/special-giggle.git@848bdee38fe92dfdd1e32d1da95f4435d545840b#egg=special_giggle
 SQLAlchemy==2.0.37
 stack-data==0.6.3
 threadpoolctl==3.5.0

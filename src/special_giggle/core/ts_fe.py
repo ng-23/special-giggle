@@ -399,7 +399,7 @@ def regional_cum_sum_daily_precip(ts:pd.DataFrame, keep_sum_daily_precip:bool=Tr
     y2_data = ts.loc[(ts['event_t'] > 364)].copy()
 
     y1_data['r_sum_precip_1d'] = y1_data.groupby(['region','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
-    y2_data['r_sum_precip_1d'] = y2_data.groupby(['region','month','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
+    y2_data['r_sum_precip_1d'] = y2_data.groupby(['region','event_t'], sort=False, observed=True)['precipitation'].transform('sum')
     
     y1_data['r_cum_sum_precip_1d'] = y1_data.groupby(['event_id','region','month'], sort=False, observed=True)['r_sum_precip_1d'].cumsum()
     y2_data['r_cum_sum_precip_1d'] = y2_data.groupby(['event_id','region','month'], sort=False, observed=True)['r_sum_precip_1d'].cumsum()

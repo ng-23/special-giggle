@@ -1,0 +1,34 @@
+General:
+https://datascience.stackexchange.com/questions/2403/data-science-without-knowledge-of-a-specific-topic-is-it-worth-pursuing-as-a-ca/2406#2406
+https://fraud-detection-handbook.github.io/fraud-detection-handbook/Foreword.html
+https://stackoverflow.com/questions/19984957/scikit-learn-predict-default-threshold
+
+XGBoost:
+https://stats.stackexchange.com/questions/243207/what-is-the-proper-usage-of-scale-pos-weight-in-xgboost-for-imbalanced-datasets
+https://datascience.stackexchange.com/questions/61733/class-imbalance-and-cost-sensitive-learning-xgboost
+https://xgboosting.com/xgboost-threshold-moving-for-imbalanced-classification/
+https://datascience.stackexchange.com/questions/54043/differences-between-class-weight-and-scale-pos-weight-in-lightgbm
+https://stackoverflow.com/questions/67868420/xgboost-for-multiclassification-and-imbalanced-data
+https://stackoverflow.com/questions/48079973/xgboost-sample-weights-vs-scale-pos-weight
+
+Cross validation:
+https://datascience.stackexchange.com/questions/84395/what-is-the-next-step-after-k-fold-cv
+https://stats.stackexchange.com/questions/14099/using-k-fold-cross-validation-for-time-series-model-selection
+
+Imbalanced data:
+https://datascience.stackexchange.com/questions/75615/main-options-on-how-to-deal-with-imbalanced-data
+https://datascience.stackexchange.com/questions/106461/why-smote-is-not-used-in-prize-winning-kaggle-solutions
+https://datascience.stackexchange.com/questions/126337/why-does-data-science-see-class-imbalance-as-a-problem-for-supervised-learning-w?noredirect=1&lq=1
+https://stats.stackexchange.com/questions/357466/are-unbalanced-datasets-problematic-and-how-does-oversampling-purport-to-he
+https://machinelearningmastery.com/cost-sensitive-learning-for-imbalanced-classification/
+https://datascience.stackexchange.com/questions/107057/imbalanced-data-set-with-sample-weighting-how-to-interpret-the-performance-met
+
+Time series clustering:
+https://www.kaggle.com/code/izzettunc/introduction-to-time-series-clustering/notebook#1.-2.-What-are-time-series-?
+https://levelup.gitconnected.com/unveiling-patterns-in-time-a-guide-to-time-series-clustering-with-tslearn-50a2ff305afe
+
+Metrics:
+https://stats.stackexchange.com/questions/432754/why-log-loss-auc-and-precision-recall-change-differently-when-class-imbalance
+https://stats.stackexchange.com/questions/312780/why-is-accuracy-not-the-best-measure-for-assessing-classification-models/312787#312787
+https://stats.stackexchange.com/questions/470380/logarithmic-loss-vs-brier-score-vs-auc-score
+https://stats.stackexchange.com/questions/347785/in-binary-classification-in-what-specific-case-should-i-use-accuracy-auroc-lo

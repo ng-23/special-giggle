@@ -14,7 +14,7 @@ from sklearn.utils import compute_class_weight, compute_sample_weight
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import TimeSeriesSplit
 from special_giggle.core.schemas import validate_config
-from sklearn.metrics import log_loss, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import log_loss, brier_score_loss, roc_auc_score
 
 class AlphaObjective():
     '''
@@ -122,11 +122,6 @@ class AlphaObjective():
 
             hyperparams[param] = val
 
-        # default probability threshold - anything > is positive (1), andthing <= is negative (0)
-        # see https://datascience.stackexchange.com/questions/72296/predict-proba-for-binary-classifier-in-tensorflow
-        if 'proba_threshold' not in hyperparams:
-            hyperparams['proba_threshold'] = 0.5
-
         # see https://xgboosting.com/xgboost-scale_pos_weight-vs-sample_weight-for-imbalanced-classification/
         # see https://machinelearningmastery.com/xgboost-for-imbalanced-classification/
         class_weights = compute_class_weight(class_weight='balanced', classes=self.ts['label'].unique(), y=self.ts['label'])
@@ -145,7 +140,6 @@ class AlphaObjective():
         See https://stackoverflow.com/questions/63224426/how-can-i-cross-validate-by-pytorch-and-optuna
         '''
 
-        proba_threshold = hyperparams.pop('proba_threshold')
         hyperparams['device'] = self.device
 
         pos_cls_weight, neg_cls_weight = hyperparams.pop('pos_cls_weight'), hyperparams.pop('neg_cls_weight')
@@ -154,7 +148,7 @@ class AlphaObjective():
         # get column names of input features
         feature_cols = [col for col in self.ts.columns if col not in {'label','event_t','event_id'}]
 
-        val_metrics = {'fold':[], 'log_loss':[], 'precision':[], 'recall':[], 'f1':[], 'roc_auc':[]}
+        val_metrics = {'fold':[], 'log_loss':[], 'brier_score':[], 'roc_auc':[]}
 
         for i, (train_index, test_index) in enumerate(self.tscv.split(self.days)):
             # see https://xgboost.readthedocs.io/en/latest/parameter.html#learning-task-parameters
@@ -179,22 +173,15 @@ class AlphaObjective():
             model.fit(X_train, y_train)
 
             # make probability predictions on validation data
-            y_proba = model.predict_proba(X_val)
+            y_pos_proba = model.predict_proba(X_val)[:,-1]
 
-            # apply thresholding on probability of positive class
-            # to get actual class (0/1) predictions
-            y_pred = [(1.0 if pos_proba > proba_threshold else 0.0) for pos_proba in y_proba[:,1]] # see see https://stackoverflow.com/questions/73582838/what-is-predict-proba-and-1-after-x-test-in-code
-
-            sample_weight = compute_sample_weight(class_weight={0.0: neg_cls_weight, 1.0:pos_cls_weight}, y=y_pred)
+            sample_weight = compute_sample_weight(class_weight={0.0:neg_cls_weight, 1.0:pos_cls_weight}, y=y_val)
 
             # calc val metrics and store for later
-            # note - i think results are the same for each metric with/without sample_weight parameter
             val_metrics['fold'].append(i)
-            val_metrics['log_loss'].append(log_loss(y_val, y_proba, labels=[0.0,1.0], sample_weight=sample_weight))
-            val_metrics['precision'].append(precision_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
-            val_metrics['recall'].append(recall_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
-            val_metrics['f1'].append(f1_score(y_val, y_pred, labels=[0.0,1.0], pos_label=1.0, average='binary', zero_division=0.0, sample_weight=sample_weight))
-            val_metrics['roc_auc'].append(roc_auc_score(y_val, y_proba[:,-1], average='micro', labels=[0.0,1.0]))
+            val_metrics['log_loss'].append(log_loss(y_val, y_pos_proba, labels=[0.0,1.0], sample_weight=sample_weight))
+            val_metrics['brier_score'].append(brier_score_loss(y_val, y_pos_proba, pos_label=1.0, sample_weight=sample_weight))
+            val_metrics['roc_auc'].append(roc_auc_score(y_val, y_pos_proba, average='micro', labels=[0.0,1.0], sample_weight=sample_weight))
 
             # print val metrics for current fold
             for metric in val_metrics:
@@ -216,7 +203,6 @@ class AlphaObjective():
         '''
 
         params = trial.params
-        params.pop('proba_threshold')
         params['device'] = self.device
 
         feature_cols = [col for col in self.ts.columns if col not in {'label','event_t','event_id'}]
